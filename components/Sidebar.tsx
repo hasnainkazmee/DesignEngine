@@ -11,7 +11,8 @@ import {
   Sparkles,
   Library,
   Hand,
-  PenTool
+  PenTool,
+  Droplet
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -30,6 +31,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTool, setActiveTool, act
     { id: 'type', icon: Type, label: 'Type (T)' },
     { id: 'shape', icon: BoxSelect, label: 'Shape (R)' },
     { id: 'image', icon: ImageIcon, label: 'Media (M)' },
+    { id: 'gradient', icon: Droplet, label: 'Gradient (G)' },
   ];
 
   const handlePanelToggle = (panel: 'layers' | 'colors' | 'library') => {

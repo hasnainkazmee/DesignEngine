@@ -196,6 +196,7 @@ export default function App() {
             selectedCount={selectedElementIds.length}
             onGroup={handleGroup}
             onUngroup={handleUngroup}
+            activeTool={activeTool}
           />
           <ValidationPanel
             issues={issues}

@@ -1022,6 +1022,7 @@ export const useDesignEngine = () => {
       if (e.key === 'r') setActiveTool('shape');
       if (e.key === 'h') setActiveTool('hand');
       if (e.key === 'p') setActiveTool('pen');
+      if (e.key === 'g') setActiveTool('gradient');
 
       // Finish path on Enter/Esc
       if ((e.key === 'Enter' || e.key === 'Escape') && activePath) {

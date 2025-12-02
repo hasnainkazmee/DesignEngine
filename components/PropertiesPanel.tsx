@@ -1,8 +1,10 @@
 
-import React from 'react';
-import { DesignElement } from '../types';
+import React, { useState, useEffect } from 'react';
+import { DesignElement, ToolType } from '../types';
 import { GOOGLE_FONTS, loadFont } from '../utils/fonts';
-import { Move, Ban, Lock, PaintBucket, Type, Square, Layers, Circle, Link, Plus, PenTool } from 'lucide-react';
+import { Move, Ban, Lock, PaintBucket, Type, Square, Layers, Circle, Link, Plus, PenTool, Droplet } from 'lucide-react';
+import { GradientPanel } from './GradientPanel';
+import { createDefaultGradient } from '../utils/gradients';
 
 interface PropertiesPanelProps {
   element?: DesignElement;
@@ -13,6 +15,7 @@ interface PropertiesPanelProps {
   selectedCount: number;
   onGroup: () => void;
   onUngroup: () => void;
+  activeTool?: ToolType;
 }
 
 export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
@@ -23,8 +26,27 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   onCreateComponent,
   selectedCount,
   onGroup,
-  onUngroup
+  onUngroup,
+  activeTool
 }) => {
+  const [showGradientPanel, setShowGradientPanel] = useState(false);
+
+  // Auto-show gradient panel when gradient tool is active and element supports gradients
+  useEffect(() => {
+    if (activeTool === 'gradient' && element && (element.type === 'box' || element.type === 'image' || element.type === 'text' || element.type === 'path')) {
+      setShowGradientPanel(true);
+      // If element doesn't have a gradient, apply default one
+      if (!element.style?.gradient) {
+        onUpdate({
+          style: {
+            ...element.style,
+            gradient: createDefaultGradient()
+          }
+        });
+      }
+    }
+    // Note: We don't auto-close the panel when switching tools to preserve user's manual state
+  }, [activeTool, element?.id, element?.style?.gradient]);
   if (selectedCount > 1) {
     const selectedElements = elements.filter(el => selectedIds.includes(el.id));
     const firstGroupId = selectedElements.length > 0 ? selectedElements[0].groupId : null;
@@ -267,21 +289,72 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             )}
 
             {element.type === 'box' && (
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs text-zinc-400">Fill</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-zinc-500 uppercase">{element.style?.backgroundColor}</span>
-                  <div className="w-6 h-6 rounded border border-zinc-700 overflow-hidden relative cursor-pointer">
-                    <input
-                      type="color"
-                      value={element.style?.backgroundColor || '#2A4B8D'}
-                      onChange={(e) => handleStyleChange('backgroundColor', e.target.value)}
-                      className="absolute -top-1 -left-1 w-8 h-8 opacity-0 cursor-pointer"
-                    />
-                    <div className="w-full h-full" style={{ backgroundColor: element.style?.backgroundColor || '#2A4B8D' }} />
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs text-zinc-400">Fill</span>
+                  <div className="flex items-center gap-2">
+                    {element.style?.gradient ? (
+                      <div className="flex items-center gap-2">
+                        <div 
+                          className="w-8 h-6 rounded border border-zinc-700 cursor-pointer"
+                          style={{ 
+                            background: element.style.gradient 
+                              ? `linear-gradient(${element.style.gradient.angle || 0}deg, ${element.style.gradient.stops.map(s => `rgba(${s.color.r}, ${s.color.g}, ${s.color.b}, ${s.opacity / 100}) ${s.position}%)`).join(', ')})`
+                              : undefined
+                          }}
+                          onClick={() => setShowGradientPanel(!showGradientPanel)}
+                        />
+                        <button
+                          onClick={() => setShowGradientPanel(!showGradientPanel)}
+                          className="text-[10px] px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded transition-colors flex items-center gap-1"
+                        >
+                          <Droplet size={10} />
+                          Edit
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-xs font-mono text-zinc-500 uppercase">{element.style?.backgroundColor}</span>
+                        <div className="w-6 h-6 rounded border border-zinc-700 overflow-hidden relative cursor-pointer">
+                          <input
+                            type="color"
+                            value={element.style?.backgroundColor || '#2A4B8D'}
+                            onChange={(e) => handleStyleChange('backgroundColor', e.target.value)}
+                            className="absolute -top-1 -left-1 w-8 h-8 opacity-0 cursor-pointer"
+                          />
+                          <div className="w-full h-full" style={{ backgroundColor: element.style?.backgroundColor || '#2A4B8D' }} />
+                        </div>
+                        <button
+                          onClick={() => {
+                            handleStyleChange('gradient', createDefaultGradient());
+                            setShowGradientPanel(true);
+                          }}
+                          className="text-[10px] px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded transition-colors flex items-center gap-1"
+                          title="Add gradient"
+                        >
+                          <Droplet size={10} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
-              </div>
+                {showGradientPanel && element.style?.gradient && (
+                  <div className="mb-3 -mx-4">
+                    <GradientPanel
+                      gradient={element.style.gradient}
+                      onGradientChange={(gradient) => {
+                        if (gradient) {
+                          handleStyleChange('gradient', gradient);
+                        } else {
+                          handleStyleChange('gradient', undefined);
+                          setShowGradientPanel(false);
+                        }
+                      }}
+                      onClose={() => setShowGradientPanel(false)}
+                    />
+                  </div>
+                )}
+              </>
             )}
 
             <div className="space-y-3">
@@ -372,28 +445,79 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
                 <span className="text-xs text-zinc-400">Fill</span>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-zinc-500 uppercase">{element.style?.fill === 'none' ? 'NONE' : element.style?.fill}</span>
-
-                  {element.style?.fill !== 'none' && (
-                    <div className="w-6 h-6 rounded border border-zinc-700 overflow-hidden relative cursor-pointer">
-                      <input
-                        type="color"
-                        value={element.style?.fill === 'none' ? '#ffffff' : element.style?.fill}
-                        onChange={(e) => handleStyleChange('fill', e.target.value)}
-                        className="absolute -top-1 -left-1 w-8 h-8 opacity-0 cursor-pointer"
+                  {element.style?.gradient ? (
+                    <div className="flex items-center gap-2">
+                      <div 
+                        className="w-8 h-6 rounded border border-zinc-700 cursor-pointer"
+                        style={{ 
+                          background: element.style.gradient 
+                            ? `linear-gradient(${element.style.gradient.angle || 0}deg, ${element.style.gradient.stops.map(s => `rgba(${s.color.r}, ${s.color.g}, ${s.color.b}, ${s.opacity / 100}) ${s.position}%)`).join(', ')})`
+                            : undefined
+                        }}
+                        onClick={() => setShowGradientPanel(!showGradientPanel)}
                       />
-                      <div className="w-full h-full" style={{ backgroundColor: element.style?.fill === 'none' ? 'transparent' : element.style?.fill }} />
+                      <button
+                        onClick={() => setShowGradientPanel(!showGradientPanel)}
+                        className="text-[10px] px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded transition-colors flex items-center gap-1"
+                      >
+                        <Droplet size={10} />
+                        Edit
+                      </button>
                     </div>
-                  )}
+                  ) : (
+                    <>
+                      <span className="text-xs font-mono text-zinc-500 uppercase">{element.style?.fill === 'none' ? 'NONE' : element.style?.fill}</span>
 
-                  <button
-                    onClick={() => handleStyleChange('fill', element.style?.fill === 'none' ? '#cccccc' : 'none')}
-                    className="text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400 hover:text-white"
-                  >
-                    {element.style?.fill === 'none' ? '+' : 'x'}
-                  </button>
+                      {element.style?.fill !== 'none' && (
+                        <div className="w-6 h-6 rounded border border-zinc-700 overflow-hidden relative cursor-pointer">
+                          <input
+                            type="color"
+                            value={element.style?.fill === 'none' ? '#ffffff' : element.style?.fill}
+                            onChange={(e) => handleStyleChange('fill', e.target.value)}
+                            className="absolute -top-1 -left-1 w-8 h-8 opacity-0 cursor-pointer"
+                          />
+                          <div className="w-full h-full" style={{ backgroundColor: element.style?.fill === 'none' ? 'transparent' : element.style?.fill }} />
+                        </div>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          handleStyleChange('fill', element.style?.fill === 'none' ? '#cccccc' : 'none');
+                        }}
+                        className="text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400 hover:text-white"
+                      >
+                        {element.style?.fill === 'none' ? '+' : 'x'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          handleStyleChange('gradient', createDefaultGradient());
+                          setShowGradientPanel(true);
+                        }}
+                        className="text-[10px] px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded transition-colors flex items-center gap-1"
+                        title="Add gradient"
+                      >
+                        <Droplet size={10} />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
+              {showGradientPanel && element.style?.gradient && element.type === 'path' && (
+                <div className="mb-3 -mx-4">
+                  <GradientPanel
+                    gradient={element.style.gradient}
+                    onGradientChange={(gradient) => {
+                      if (gradient) {
+                        handleStyleChange('gradient', gradient);
+                      } else {
+                        handleStyleChange('gradient', undefined);
+                        setShowGradientPanel(false);
+                      }
+                    }}
+                    onClose={() => setShowGradientPanel(false)}
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}

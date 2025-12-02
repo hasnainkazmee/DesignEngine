@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { GridConfig, DesignElement, ToolType, ComponentItem, PathPoint } from '../types';
+import { generateGradientCSS, sortColorStops } from '../utils/gradients';
 
 interface CanvasProps {
   elements: DesignElement[];
@@ -51,6 +52,14 @@ export const Canvas: React.FC<CanvasProps> = ({
   const canvasRef = useRef<HTMLDivElement>(null);
   const artboardRef = useRef<HTMLDivElement>(null);
   const [marquee, setMarquee] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
+  const [gradientEditState, setGradientEditState] = useState<{
+    isDragging: boolean;
+    handleType: 'start' | 'end' | 'center' | 'angle' | null;
+    elementId: string | null;
+    startX: number;
+    startY: number;
+    initialGradient: any;
+  } | null>(null);
   const [dragState, setDragState] = useState<{
     isDragging: boolean;
     isResizing: boolean;
@@ -168,6 +177,71 @@ export const Canvas: React.FC<CanvasProps> = ({
         return;
       }
 
+      // --- GRADIENT EDITING ---
+      if (gradientEditState?.isDragging && gradientEditState.elementId) {
+        const mouseX = currentClientX - rect.left;
+        const mouseY = currentClientY - rect.top;
+        const canvasX = (mouseX - pan.x) / zoom;
+        const canvasY = (mouseY - pan.y) / zoom;
+
+        const element = elements.find(el => el.id === gradientEditState.elementId);
+        if (!element || !element.style?.gradient) return;
+
+        const gradient = { ...element.style.gradient };
+        const elX = element.x;
+        const elY = element.y;
+        const elW = element.width;
+        const elH = element.height;
+
+        if (gradient.type === 'linear' && (gradientEditState.handleType === 'start' || gradientEditState.handleType === 'end')) {
+          const centerX = elX + elW / 2;
+          const centerY = elY + elH / 2;
+
+          // Calculate new angle based on mouse position relative to center
+          const dx = canvasX - centerX;
+          const dy = canvasY - centerY;
+          const newAngle = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+
+          onUpdate(gradientEditState.elementId, {
+            style: {
+              ...element.style,
+              gradient: { ...gradient, angle: newAngle }
+            }
+          });
+        } else if (gradient.type === 'radial') {
+          if (gradientEditState.handleType === 'center') {
+            const newX = Math.max(0, Math.min(1, (canvasX - elX) / elW));
+            const newY = Math.max(0, Math.min(1, (canvasY - elY) / elH));
+
+            onUpdate(gradientEditState.elementId, {
+              style: {
+                ...element.style,
+                gradient: { ...gradient, position: { x: newX, y: newY } }
+              }
+            });
+          } else if (gradientEditState.handleType === 'radius') {
+            const pos = gradient.position || { x: 0.5, y: 0.5 };
+            const centerX = elX + pos.x * elW;
+            const centerY = elY + pos.y * elH;
+
+            const distance = Math.sqrt(
+              Math.pow(canvasX - centerX, 2) + 
+              Math.pow(canvasY - centerY, 2)
+            );
+            const maxRadius = Math.min(elW, elH) / 2;
+            const newRadius = Math.max(0.1, Math.min(1, distance / maxRadius));
+
+            onUpdate(gradientEditState.elementId, {
+              style: {
+                ...element.style,
+                gradient: { ...gradient, radius: newRadius }
+              }
+            });
+          }
+        }
+        return;
+      }
+
       const deltaScreenX = currentClientX - dragState.startX;
       const deltaScreenY = currentClientY - dragState.startY;
 
@@ -268,6 +342,11 @@ export const Canvas: React.FC<CanvasProps> = ({
         onPenToolMouseUp();
       }
 
+      // --- GRADIENT EDITING MOUSE UP ---
+      if (gradientEditState?.isDragging) {
+        setGradientEditState(null);
+      }
+
       // If we were selecting, find elements in marquee
       if (dragState.isSelecting && marquee) {
         const selected = elements.filter(el => {
@@ -300,7 +379,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       setMarquee(null);
     };
 
-    if (dragState.isDragging || dragState.isResizing || dragState.isPanning || dragState.isSelecting || (activeTool === 'pen' && penToolState?.isDragging)) {
+    if (dragState.isDragging || dragState.isResizing || dragState.isPanning || dragState.isSelecting || (activeTool === 'pen' && penToolState?.isDragging) || gradientEditState?.isDragging) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     }
@@ -309,7 +388,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragState, elements, onUpdate, snapToGrid, onPanChange, zoom, onSelect, pan.x, pan.y, activeTool, penToolState, onPenToolMouseMove, onPenToolMouseUp]);
+  }, [dragState, elements, onUpdate, snapToGrid, onPanChange, zoom, onSelect, pan.x, pan.y, activeTool, penToolState, onPenToolMouseMove, onPenToolMouseUp, gradientEditState]);
 
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -357,6 +436,32 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Pen tool uses mouse down for better drag handling
     if (activeTool === 'pen' && onPenToolMouseDown) {
       onPenToolMouseDown(canvasX, canvasY);
+    } else if (activeTool === 'gradient') {
+      // Gradient tool: apply gradient to clicked element if it's a box/image
+      const clickedElement = elements.find(el => {
+        return canvasX >= el.x && canvasX <= el.x + el.width &&
+               canvasY >= el.y && canvasY <= el.y + el.height;
+      });
+      
+      if (clickedElement && (clickedElement.type === 'box' || clickedElement.type === 'image')) {
+        if (!clickedElement.style?.gradient) {
+          // Apply default gradient if element doesn't have one
+          onUpdate(clickedElement.id, {
+            style: {
+              ...clickedElement.style,
+              gradient: {
+                type: 'linear',
+                angle: 0,
+                stops: [
+                  { position: 0, color: { r: 0, g: 0, b: 0 }, opacity: 100 },
+                  { position: 100, color: { r: 255, g: 255, b: 255 }, opacity: 100 }
+                ]
+              }
+            }
+          });
+        }
+        onSelect([clickedElement.id]);
+      }
     } else if (activeTool !== 'select') {
       onCanvasClick(canvasX, canvasY);
     }
@@ -383,6 +488,31 @@ export const Canvas: React.FC<CanvasProps> = ({
         initialElements: [],
         initialBoundingBox: null,
       }));
+      return;
+    }
+
+    // Gradient tool: apply gradient to clicked element
+    if (activeTool === 'gradient') {
+      const clickedElement = elements.find(el => el.id === id);
+      if (clickedElement && (clickedElement.type === 'box' || clickedElement.type === 'image' || clickedElement.type === 'text' || clickedElement.type === 'path')) {
+        if (!clickedElement.style?.gradient) {
+          // Apply default gradient if element doesn't have one
+          onUpdate(clickedElement.id, {
+            style: {
+              ...clickedElement.style,
+              gradient: {
+                type: 'linear',
+                angle: 0,
+                stops: [
+                  { position: 0, color: { r: 0, g: 0, b: 0 }, opacity: 100 },
+                  { position: 100, color: { r: 255, g: 255, b: 255 }, opacity: 100 }
+                ]
+              }
+            }
+          });
+        }
+        onSelect([clickedElement.id]);
+      }
       return;
     }
 
@@ -480,41 +610,55 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   // --- Path Rendering Helper ---
-  const renderPath = (points: PathPoint[], isClosed: boolean, style: any) => {
+  const renderPath = (points: PathPoint[], isClosed: boolean, style: any, elementId?: string, width?: number, height?: number) => {
     if (points.length === 0) return null;
 
+    // Calculate bounding box of the path to properly position gradients
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const allPoints = [...points];
+    points.forEach(p => {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+      if (p.control1) {
+        minX = Math.min(minX, p.control1.x);
+        minY = Math.min(minY, p.control1.y);
+        maxX = Math.max(maxX, p.control1.x);
+        maxY = Math.max(maxY, p.control1.y);
+      }
+      if (p.control2) {
+        minX = Math.min(minX, p.control2.x);
+        minY = Math.min(minY, p.control2.y);
+        maxX = Math.max(maxX, p.control2.x);
+        maxY = Math.max(maxY, p.control2.y);
+      }
+    });
+    const pathWidth = maxX - minX || 1;
+    const pathHeight = maxY - minY || 1;
+
+    // Build path using original coordinates
     let d = `M ${points[0].x} ${points[0].y}`;
 
     for (let i = 1; i < points.length; i++) {
       const p = points[i];
       const prev = points[i - 1];
 
-      // For a curve between prev and p, we need:
-      // - prev.control2 (outgoing from prev) 
-      // - p.control1 (incoming to p) - either set explicitly or calculated from prev.control2
       const hasPrevControl2 = prev.control2 !== undefined;
       const hasCurrControl1 = p.control1 !== undefined;
 
-      // If previous point has control2, automatically create curve for current segment
-      // The handle defines the curve direction - use it directly, no mirroring
       if (hasPrevControl2) {
         if (hasCurrControl1) {
-          // Both handles exist - use them directly
           d += ` C ${prev.control2.x} ${prev.control2.y}, ${p.control1.x} ${p.control1.y}, ${p.x} ${p.y}`;
         } else {
-          // Previous point has handle - use it directly to create curve
-          // The curve follows the handle direction exactly, no mirroring
-          // Use quadratic Bezier which naturally follows the control point direction
           d += ` Q ${prev.control2.x} ${prev.control2.y}, ${p.x} ${p.y}`;
         }
       } else {
-        // No handle on previous point - straight line
         d += ` L ${p.x} ${p.y}`;
       }
     }
 
     if (isClosed) {
-      // For closed paths, check if we need to curve back to start
       const firstPoint = points[0];
       const lastPoint = points[points.length - 1];
       const hasLastControl = lastPoint.control2 !== undefined;
@@ -532,16 +676,81 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     const strokeColor = style?.stroke === 'none' || !style?.stroke ? 'none' : (style.stroke || 'black');
+    const gradientId = elementId && style?.gradient ? `gradient-${elementId}` : null;
+    
+    // Generate gradient definition if needed - use path bounding box coordinates
+    const gradientDef = gradientId && style?.gradient && pathWidth > 0 && pathHeight > 0 ? (
+      <defs>
+        {style.gradient.type === 'linear' ? (
+          <linearGradient 
+            id={gradientId} 
+            x1={minX}
+            y1={minY}
+            x2={maxX}
+            y2={minY}
+            gradientUnits="userSpaceOnUse"
+            gradientTransform={`rotate(${style.gradient.angle || 0} ${minX + pathWidth / 2} ${minY + pathHeight / 2})`}
+          >
+            {sortColorStops(style.gradient.stops).map((stop, idx) => (
+              <stop
+                key={idx}
+                offset={`${stop.position}%`}
+                stopColor={`rgb(${stop.color.r}, ${stop.color.g}, ${stop.color.b})`}
+                stopOpacity={stop.opacity / 100}
+              />
+            ))}
+          </linearGradient>
+        ) : style.gradient.type === 'radial' ? (
+          <radialGradient
+            id={gradientId}
+            cx={minX + (style.gradient.position?.x || 0.5) * pathWidth}
+            cy={minY + (style.gradient.position?.y || 0.5) * pathHeight}
+            r={(style.gradient.radius || 0.5) * Math.max(pathWidth, pathHeight)}
+            gradientUnits="userSpaceOnUse"
+          >
+            {sortColorStops(style.gradient.stops).map((stop, idx) => (
+              <stop
+                key={idx}
+                offset={`${stop.position}%`}
+                stopColor={`rgb(${stop.color.r}, ${stop.color.g}, ${stop.color.b})`}
+                stopOpacity={stop.opacity / 100}
+              />
+            ))}
+          </radialGradient>
+        ) : (
+          <linearGradient 
+            id={gradientId} 
+            x1={minX}
+            y1={minY}
+            x2={maxX}
+            y2={minY}
+            gradientUnits="userSpaceOnUse"
+          >
+            {sortColorStops(style.gradient.stops).map((stop, idx) => (
+              <stop
+                key={idx}
+                offset={`${stop.position}%`}
+                stopColor={`rgb(${stop.color.r}, ${stop.color.g}, ${stop.color.b})`}
+                stopOpacity={stop.opacity / 100}
+              />
+            ))}
+          </linearGradient>
+        )}
+      </defs>
+    ) : null;
     
     return (
-      <path
-        d={d}
-        stroke={strokeColor}
-        strokeWidth={strokeColor === 'none' ? 0 : (style?.strokeWidth || 2)}
-        fill={style?.fill || 'none'}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      <>
+        {gradientDef}
+        <path
+          d={d}
+          stroke={strokeColor}
+          strokeWidth={strokeColor === 'none' ? 0 : (style?.strokeWidth || 2)}
+          fill={gradientId ? `url(#${gradientId})` : (style?.fill || 'none')}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </>
     );
   };
 
@@ -654,7 +863,15 @@ export const Canvas: React.FC<CanvasProps> = ({
                 }}
               >
                 {/* Content */}
-                <div className="w-full h-full overflow-hidden" style={{ borderRadius: isCircle ? '50%' : (el.style?.borderRadius || 0) }}>
+                <div 
+                  className="w-full h-full overflow-hidden" 
+                  style={{ 
+                    borderRadius: isCircle ? '50%' : (el.style?.borderRadius || 0),
+                    backgroundColor: el.style?.gradient && el.type !== 'path' ? undefined : (el.style?.backgroundColor || 'transparent'),
+                    backgroundImage: el.style?.gradient && el.type !== 'text' && el.type !== 'path' ? generateGradientCSS(el.style.gradient, el.width, el.height) : undefined,
+                    backgroundSize: el.style?.gradient && el.type !== 'text' && el.type !== 'path' ? '100% 100%' : undefined
+                  }}
+                >
                   {el.type === 'text' ? (
                     isEditing ? (
                       <div
@@ -681,11 +898,18 @@ export const Canvas: React.FC<CanvasProps> = ({
                         }}
                         style={{
                           cursor: 'text',
-                          caretColor: el.style?.color || 'black',
+                          caretColor: el.style?.gradient ? '#000' : (el.style?.color || 'black'),
                           whiteSpace: 'pre-wrap',
                           fontFamily: el.style?.fontFamily || 'Inter',
                           width: '100%',
-                          height: '100%'
+                          height: '100%',
+                          ...(el.style?.gradient ? {
+                            backgroundImage: generateGradientCSS(el.style.gradient, el.width, el.height),
+                            WebkitBackgroundClip: 'text',
+                            WebkitTextFillColor: 'transparent',
+                            backgroundClip: 'text',
+                            color: 'transparent'
+                          } : {})
                         }}
                       >
                         {el.content}
@@ -693,7 +917,18 @@ export const Canvas: React.FC<CanvasProps> = ({
                     ) : (
                       <div
                         className="w-full h-full whitespace-pre-wrap select-none"
-                        style={{ fontFamily: el.style?.fontFamily || 'Inter' }}
+                        style={{ 
+                          fontFamily: el.style?.fontFamily || 'Inter',
+                          ...(el.style?.gradient ? {
+                            backgroundImage: generateGradientCSS(el.style.gradient, el.width, el.height),
+                            WebkitBackgroundClip: 'text',
+                            WebkitTextFillColor: 'transparent',
+                            backgroundClip: 'text',
+                            color: 'transparent'
+                          } : {
+                            color: el.style?.color || 'black'
+                          })
+                        }}
                       >
                         {el.content || 'Double click to edit'}
                       </div>
@@ -715,7 +950,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                     )
                   ) : el.type === 'path' && el.points ? (
                     <svg className="overflow-visible w-full h-full absolute top-0 left-0 pointer-events-none">
-                      {renderPath(el.points, el.isClosed || false, el.style)}
+                      {renderPath(el.points, el.isClosed || false, el.style, el.id, el.width, el.height)}
                     </svg>
                   ) : null}
                 </div>
@@ -819,6 +1054,151 @@ export const Canvas: React.FC<CanvasProps> = ({
                 ))}
               </svg>
             );
+          })()}
+
+          {/* Gradient Handles - Show when gradient tool is active and element has gradient */}
+          {activeTool === 'gradient' && selectedIds.length === 1 && (() => {
+            const selectedElement = elements.find(el => el.id === selectedIds[0]);
+            if (!selectedElement || !selectedElement.style?.gradient) return null;
+
+            const gradient = selectedElement.style.gradient;
+            const elX = selectedElement.x;
+            const elY = selectedElement.y;
+            const elW = selectedElement.width;
+            const elH = selectedElement.height;
+
+            // Calculate gradient line endpoints for linear gradients
+            if (gradient.type === 'linear') {
+              const angle = (gradient.angle || 0) * Math.PI / 180;
+              const centerX = elX + elW / 2;
+              const centerY = elY + elH / 2;
+              const length = Math.sqrt(elW * elW + elH * elH) / 2;
+              
+              const startX = centerX - Math.cos(angle) * length;
+              const startY = centerY - Math.sin(angle) * length;
+              const endX = centerX + Math.cos(angle) * length;
+              const endY = centerY + Math.sin(angle) * length;
+
+              return (
+                <svg className="absolute top-0 left-0 w-full h-full pointer-events-none z-50 overflow-visible" data-export-ignore="true">
+                  <line
+                    x1={startX}
+                    y1={startY}
+                    x2={endX}
+                    y2={endY}
+                    stroke="#0066ff"
+                    strokeWidth={2}
+                    strokeDasharray="4,4"
+                    opacity={0.6}
+                  />
+                  <circle
+                    cx={startX}
+                    cy={startY}
+                    r={6}
+                    fill="white"
+                    stroke="#0066ff"
+                    strokeWidth={2}
+                    className="pointer-events-auto cursor-move"
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      setGradientEditState({
+                        isDragging: true,
+                        handleType: 'start',
+                        elementId: selectedElement.id,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        initialGradient: { ...gradient }
+                      });
+                    }}
+                  />
+                  <circle
+                    cx={endX}
+                    cy={endY}
+                    r={6}
+                    fill="white"
+                    stroke="#0066ff"
+                    strokeWidth={2}
+                    className="pointer-events-auto cursor-move"
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      setGradientEditState({
+                        isDragging: true,
+                        handleType: 'end',
+                        elementId: selectedElement.id,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        initialGradient: { ...gradient }
+                      });
+                    }}
+                  />
+                </svg>
+              );
+            }
+
+            // Radial gradient handles
+            if (gradient.type === 'radial') {
+              const pos = gradient.position || { x: 0.5, y: 0.5 };
+              const centerX = elX + pos.x * elW;
+              const centerY = elY + pos.y * elH;
+              const radius = (gradient.radius || 0.5) * Math.min(elW, elH);
+
+              return (
+                <svg className="absolute top-0 left-0 w-full h-full pointer-events-none z-50 overflow-visible" data-export-ignore="true">
+                  <circle
+                    cx={centerX}
+                    cy={centerY}
+                    r={radius}
+                    fill="none"
+                    stroke="#0066ff"
+                    strokeWidth={2}
+                    strokeDasharray="4,4"
+                    opacity={0.6}
+                  />
+                  <circle
+                    cx={centerX}
+                    cy={centerY}
+                    r={6}
+                    fill="white"
+                    stroke="#0066ff"
+                    strokeWidth={2}
+                    className="pointer-events-auto cursor-move"
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      setGradientEditState({
+                        isDragging: true,
+                        handleType: 'center',
+                        elementId: selectedElement.id,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        initialGradient: { ...gradient }
+                      });
+                    }}
+                  />
+                  <circle
+                    cx={centerX + radius}
+                    cy={centerY}
+                    r={5}
+                    fill="#0066ff"
+                    stroke="white"
+                    strokeWidth={2}
+                    className="pointer-events-auto cursor-ew-resize"
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      setGradientEditState({
+                        isDragging: true,
+                        handleType: 'radius',
+                        elementId: selectedElement.id,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        initialGradient: { ...gradient }
+                      });
+                    }}
+                  />
+                </svg>
+              );
+            }
+
+            return null;
           })()}
         </div>
       </div>

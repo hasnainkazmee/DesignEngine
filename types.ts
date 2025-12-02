@@ -1,6 +1,6 @@
 
 
-export type ToolType = 'select' | 'type' | 'image' | 'shape' | 'frame' | 'hand' | 'pen';
+export type ToolType = 'select' | 'type' | 'image' | 'shape' | 'frame' | 'hand' | 'pen' | 'gradient';
 
 export type ConstraintType = 'grid-snap' | 'baseline-snap' | 'aspect-ratio' | 'margin-bound';
 
@@ -21,6 +21,20 @@ export interface PathPoint {
   y: number;
   control1?: { x: number; y: number }; // Control point for incoming curve
   control2?: { x: number; y: number }; // Control point for outgoing curve
+}
+
+export interface ColorStop {
+  position: number; // 0-100 percentage
+  color: { r: number; g: number; b: number };
+  opacity: number; // 0-100
+}
+
+export interface Gradient {
+  type: 'linear' | 'radial' | 'angular';
+  angle?: number; // 0-360 for linear gradients
+  position?: { x: number; y: number }; // center point for radial/angular (0-1 relative to element)
+  radius?: number; // for radial gradients (0-1 relative to element size)
+  stops: ColorStop[];
 }
 
 export interface DesignElement {
@@ -53,6 +67,8 @@ export interface DesignElement {
     stroke?: string;
     strokeWidth?: number;
     fill?: string;
+    gradient?: Gradient; // Gradient for fill
+    strokeGradient?: Gradient; // Gradient for stroke
   };
   constraints: ConstraintType[];
 }
