@@ -10,7 +10,8 @@ import {
   Layers,
   Sparkles,
   Library,
-  Hand
+  Hand,
+  PenTool
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -25,6 +26,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTool, setActiveTool, act
   const tools = [
     { id: 'select', icon: MousePointer2, label: 'Select (V)' },
     { id: 'hand', icon: Hand, label: 'Pan (H/Space)' },
+    { id: 'pen', icon: PenTool, label: 'Pen (P)' },
     { id: 'type', icon: Type, label: 'Type (T)' },
     { id: 'shape', icon: BoxSelect, label: 'Shape (R)' },
     { id: 'image', icon: ImageIcon, label: 'Media (M)' },

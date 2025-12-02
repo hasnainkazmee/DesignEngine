@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
-import { GridConfig, DesignElement, ToolType, ComponentItem } from '../types';
+import { GridConfig, DesignElement, ToolType, ComponentItem, PathPoint } from '../types';
 
 interface CanvasProps {
   elements: DesignElement[];
@@ -17,6 +17,12 @@ interface CanvasProps {
   onPanChange: (pan: { x: number, y: number }) => void;
   zoom: number;
   exportRef?: React.MutableRefObject<HTMLDivElement | null>;
+  activePath?: { points: PathPoint[], isClosed: boolean } | null;
+  penToolState?: { isDragging: boolean; startX: number; startY: number; currentPointIndex: number | null } | null;
+  editingPathId?: string | null;
+  onPenToolMouseDown?: (x: number, y: number) => void;
+  onPenToolMouseMove?: (x: number, y: number) => void;
+  onPenToolMouseUp?: () => void;
 }
 
 export const Canvas: React.FC<CanvasProps> = ({
@@ -34,7 +40,13 @@ export const Canvas: React.FC<CanvasProps> = ({
   pan,
   onPanChange,
   zoom,
-  exportRef
+  exportRef,
+  activePath,
+  penToolState,
+  editingPathId,
+  onPenToolMouseDown,
+  onPenToolMouseMove,
+  onPenToolMouseUp
 }) => {
   const canvasRef = useRef<HTMLDivElement>(null);
   const artboardRef = useRef<HTMLDivElement>(null);
@@ -146,6 +158,16 @@ export const Canvas: React.FC<CanvasProps> = ({
       const currentClientX = e.clientX;
       const currentClientY = e.clientY;
 
+      // --- PEN TOOL DRAGGING ---
+      if (activeTool === 'pen' && penToolState?.isDragging && onPenToolMouseMove) {
+        const mouseX = currentClientX - rect.left;
+        const mouseY = currentClientY - rect.top;
+        const canvasX = (mouseX - pan.x) / zoom;
+        const canvasY = (mouseY - pan.y) / zoom;
+        onPenToolMouseMove(canvasX, canvasY);
+        return;
+      }
+
       const deltaScreenX = currentClientX - dragState.startX;
       const deltaScreenY = currentClientY - dragState.startY;
 
@@ -241,6 +263,11 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
 
     const handleMouseUp = () => {
+      // --- PEN TOOL MOUSE UP ---
+      if (activeTool === 'pen' && penToolState?.isDragging && onPenToolMouseUp) {
+        onPenToolMouseUp();
+      }
+
       // If we were selecting, find elements in marquee
       if (dragState.isSelecting && marquee) {
         const selected = elements.filter(el => {
@@ -273,7 +300,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       setMarquee(null);
     };
 
-    if (dragState.isDragging || dragState.isResizing || dragState.isPanning || dragState.isSelecting) {
+    if (dragState.isDragging || dragState.isResizing || dragState.isPanning || dragState.isSelecting || (activeTool === 'pen' && penToolState?.isDragging)) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     }
@@ -282,7 +309,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragState, elements, onUpdate, snapToGrid, onPanChange, zoom, onSelect, pan.x, pan.y]);
+  }, [dragState, elements, onUpdate, snapToGrid, onPanChange, zoom, onSelect, pan.x, pan.y, activeTool, penToolState, onPenToolMouseMove, onPenToolMouseUp]);
 
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -327,12 +354,21 @@ export const Canvas: React.FC<CanvasProps> = ({
     // onSelect([]); // We do this on mouseUp now to allow clicking an item without clearing selection
     setEditingId(null);
 
-    if (activeTool !== 'select') {
+    // Pen tool uses mouse down for better drag handling
+    if (activeTool === 'pen' && onPenToolMouseDown) {
+      onPenToolMouseDown(canvasX, canvasY);
+    } else if (activeTool !== 'select') {
       onCanvasClick(canvasX, canvasY);
     }
   };
 
   const handleElementMouseDown = (e: React.MouseEvent, id: string) => {
+    // Allow pen tool to click through elements
+    if (activeTool === 'pen') {
+      // Don't stop propagation, let it reach canvas
+      return;
+    }
+
     e.stopPropagation();
 
     // If Hand tool, delegate to canvas pan
@@ -441,6 +477,72 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (type === 'text') {
       setEditingId(id);
     }
+  };
+
+  // --- Path Rendering Helper ---
+  const renderPath = (points: PathPoint[], isClosed: boolean, style: any) => {
+    if (points.length === 0) return null;
+
+    let d = `M ${points[0].x} ${points[0].y}`;
+
+    for (let i = 1; i < points.length; i++) {
+      const p = points[i];
+      const prev = points[i - 1];
+
+      // For a curve between prev and p, we need:
+      // - prev.control2 (outgoing from prev) 
+      // - p.control1 (incoming to p) - either set explicitly or calculated from prev.control2
+      const hasPrevControl2 = prev.control2 !== undefined;
+      const hasCurrControl1 = p.control1 !== undefined;
+
+      // If previous point has control2, automatically create curve for current segment
+      // The handle defines the curve direction - use it directly, no mirroring
+      if (hasPrevControl2) {
+        if (hasCurrControl1) {
+          // Both handles exist - use them directly
+          d += ` C ${prev.control2.x} ${prev.control2.y}, ${p.control1.x} ${p.control1.y}, ${p.x} ${p.y}`;
+        } else {
+          // Previous point has handle - use it directly to create curve
+          // The curve follows the handle direction exactly, no mirroring
+          // Use quadratic Bezier which naturally follows the control point direction
+          d += ` Q ${prev.control2.x} ${prev.control2.y}, ${p.x} ${p.y}`;
+        }
+      } else {
+        // No handle on previous point - straight line
+        d += ` L ${p.x} ${p.y}`;
+      }
+    }
+
+    if (isClosed) {
+      // For closed paths, check if we need to curve back to start
+      const firstPoint = points[0];
+      const lastPoint = points[points.length - 1];
+      const hasLastControl = lastPoint.control2 !== undefined;
+      const hasFirstControl = firstPoint.control1 !== undefined;
+
+      if (hasLastControl && hasFirstControl) {
+        d += ` C ${lastPoint.control2.x} ${lastPoint.control2.y}, ${firstPoint.control1.x} ${firstPoint.control1.y}, ${firstPoint.x} ${firstPoint.y}`;
+      } else if (hasLastControl) {
+        d += ` Q ${lastPoint.control2.x} ${lastPoint.control2.y}, ${firstPoint.x} ${firstPoint.y}`;
+      } else if (hasFirstControl) {
+        d += ` Q ${firstPoint.control1.x} ${firstPoint.control1.y}, ${firstPoint.x} ${firstPoint.y}`;
+      } else {
+        d += ' Z';
+      }
+    }
+
+    const strokeColor = style?.stroke === 'none' || !style?.stroke ? 'none' : (style.stroke || 'black');
+    
+    return (
+      <path
+        d={d}
+        stroke={strokeColor}
+        strokeWidth={strokeColor === 'none' ? 0 : (style?.strokeWidth || 2)}
+        fill={style?.fill || 'none'}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    );
   };
 
   // --- Rendering ---
@@ -611,6 +713,10 @@ export const Canvas: React.FC<CanvasProps> = ({
                         <span className="text-xs mt-1">Awaiting source</span>
                       </div>
                     )
+                  ) : el.type === 'path' && el.points ? (
+                    <svg className="overflow-visible w-full h-full absolute top-0 left-0 pointer-events-none">
+                      {renderPath(el.points, el.isClosed || false, el.style)}
+                    </svg>
                   ) : null}
                 </div>
 
@@ -659,6 +765,61 @@ export const Canvas: React.FC<CanvasProps> = ({
               }}
             />
           )}
+
+          {/* Active Path (Drawing) */}
+          {activePath && (
+            <svg className="absolute top-0 left-0 w-full h-full pointer-events-none z-50 overflow-visible">
+              {renderPath(activePath.points, activePath.isClosed, { stroke: '#0066ff', strokeWidth: 2, fill: 'none' })}
+              {activePath.points.map((p, i) => (
+                <g key={i}>
+                  <circle cx={p.x} cy={p.y} r={4} fill="white" stroke="#0066ff" strokeWidth={2} />
+                  {p.control1 && (
+                    <>
+                      <line x1={p.x} y1={p.y} x2={p.control1.x} y2={p.control1.y} stroke="#0066ff" strokeWidth={1} strokeDasharray="2,2" opacity={0.5} />
+                      <circle cx={p.control1.x} cy={p.control1.y} r={3} fill="#0066ff" stroke="white" strokeWidth={1} />
+                    </>
+                  )}
+                  {p.control2 && (
+                    <>
+                      <line x1={p.x} y1={p.y} x2={p.control2.x} y2={p.control2.y} stroke="#0066ff" strokeWidth={1} strokeDasharray="2,2" opacity={0.5} />
+                      <circle cx={p.control2.x} cy={p.control2.y} r={3} fill="#0066ff" stroke="white" strokeWidth={1} />
+                    </>
+                  )}
+                </g>
+              ))}
+            </svg>
+          )}
+
+          {/* Path Editing Mode - Show control handles for selected path */}
+          {editingPathId && (() => {
+            const editingPath = elements.find(el => el.id === editingPathId && el.type === 'path');
+            if (!editingPath || !editingPath.points) return null;
+
+            return (
+              <svg 
+                className="absolute top-0 left-0 w-full h-full pointer-events-none z-50 overflow-visible"
+                style={{ left: editingPath.x, top: editingPath.y }}
+              >
+                {editingPath.points.map((p, i) => (
+                  <g key={i}>
+                    <circle cx={p.x} cy={p.y} r={5} fill="white" stroke="#0066ff" strokeWidth={2} className="pointer-events-auto cursor-move" />
+                    {p.control1 && (
+                      <>
+                        <line x1={p.x} y1={p.y} x2={p.control1.x} y2={p.control1.y} stroke="#0066ff" strokeWidth={1} strokeDasharray="2,2" opacity={0.5} />
+                        <circle cx={p.control1.x} cy={p.control1.y} r={4} fill="#0066ff" stroke="white" strokeWidth={1.5} className="pointer-events-auto cursor-pointer" />
+                      </>
+                    )}
+                    {p.control2 && (
+                      <>
+                        <line x1={p.x} y1={p.y} x2={p.control2.x} y2={p.control2.y} stroke="#0066ff" strokeWidth={1} strokeDasharray="2,2" opacity={0.5} />
+                        <circle cx={p.control2.x} cy={p.control2.y} r={4} fill="#0066ff" stroke="white" strokeWidth={1.5} className="pointer-events-auto cursor-pointer" />
+                      </>
+                    )}
+                  </g>
+                ))}
+              </svg>
+            );
+          })()}
         </div>
       </div>
     </div>

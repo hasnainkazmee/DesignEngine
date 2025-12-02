@@ -2,7 +2,7 @@
 import React from 'react';
 import { DesignElement } from '../types';
 import { GOOGLE_FONTS, loadFont } from '../utils/fonts';
-import { Move, Ban, Lock, PaintBucket, Type, Square, Layers, Circle, Link, Plus } from 'lucide-react';
+import { Move, Ban, Lock, PaintBucket, Type, Square, Layers, Circle, Link, Plus, PenTool } from 'lucide-react';
 
 interface PropertiesPanelProps {
   element?: DesignElement;
@@ -90,6 +90,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             {element.type === 'image' && <Square size={10} />}
             {element.type === 'box' && element.shapeType === 'circle' && <Circle size={10} />}
             {element.type === 'box' && element.shapeType !== 'circle' && <Square size={10} />}
+            {element.type === 'path' && <PenTool size={10} />}
             {element.type.toUpperCase()}
           </span>
           <span className="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded font-mono truncate max-w-[100px]">
@@ -313,6 +314,86 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   />
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Path Styling */}
+        {element.type === 'path' && (
+          <div className="p-4 border-b border-zinc-800">
+            <h3 className="text-[10px] font-bold uppercase text-zinc-600 mb-3 flex items-center gap-2">
+              <PaintBucket size={10} /> Path Style
+            </h3>
+
+            <div className="space-y-3">
+              {/* Stroke */}
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-zinc-400">Stroke</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleStyleChange('stroke', 'none')}
+                    className="text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                    title="Remove stroke"
+                  >
+                    None
+                  </button>
+                  <span className="text-xs font-mono text-zinc-500 uppercase">
+                    {element.style?.stroke === 'none' || !element.style?.stroke ? 'NONE' : element.style.stroke}
+                  </span>
+                  {element.style?.stroke !== 'none' && (
+                    <div className="w-6 h-6 rounded border border-zinc-700 overflow-hidden relative cursor-pointer">
+                      <input
+                        type="color"
+                        value={element.style?.stroke || '#000000'}
+                        onChange={(e) => handleStyleChange('stroke', e.target.value)}
+                        className="absolute -top-1 -left-1 w-8 h-8 opacity-0 cursor-pointer"
+                      />
+                      <div className="w-full h-full" style={{ backgroundColor: element.style?.stroke || '#000000' }} />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex justify-between text-xs text-zinc-400">
+                  <span>Width</span>
+                  <span>{element.style?.strokeWidth ?? 1}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="0" max="20"
+                  value={element.style?.strokeWidth ?? 1}
+                  onChange={(e) => handleStyleChange('strokeWidth', parseInt(e.target.value))}
+                  className="w-full accent-blue-600 h-1 bg-zinc-800 rounded appearance-none"
+                />
+              </div>
+
+              {/* Fill */}
+              <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
+                <span className="text-xs text-zinc-400">Fill</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-zinc-500 uppercase">{element.style?.fill === 'none' ? 'NONE' : element.style?.fill}</span>
+
+                  {element.style?.fill !== 'none' && (
+                    <div className="w-6 h-6 rounded border border-zinc-700 overflow-hidden relative cursor-pointer">
+                      <input
+                        type="color"
+                        value={element.style?.fill === 'none' ? '#ffffff' : element.style?.fill}
+                        onChange={(e) => handleStyleChange('fill', e.target.value)}
+                        className="absolute -top-1 -left-1 w-8 h-8 opacity-0 cursor-pointer"
+                      />
+                      <div className="w-full h-full" style={{ backgroundColor: element.style?.fill === 'none' ? 'transparent' : element.style?.fill }} />
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => handleStyleChange('fill', element.style?.fill === 'none' ? '#cccccc' : 'none')}
+                    className="text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400 hover:text-white"
+                  >
+                    {element.style?.fill === 'none' ? '+' : 'x'}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

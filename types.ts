@@ -1,6 +1,6 @@
 
 
-export type ToolType = 'select' | 'type' | 'image' | 'shape' | 'frame' | 'hand';
+export type ToolType = 'select' | 'type' | 'image' | 'shape' | 'frame' | 'hand' | 'pen';
 
 export type ConstraintType = 'grid-snap' | 'baseline-snap' | 'aspect-ratio' | 'margin-bound';
 
@@ -16,9 +16,16 @@ export interface GridConfig {
   height: number;
 }
 
+export interface PathPoint {
+  x: number;
+  y: number;
+  control1?: { x: number; y: number }; // Control point for incoming curve
+  control2?: { x: number; y: number }; // Control point for outgoing curve
+}
+
 export interface DesignElement {
   id: string;
-  type: 'text' | 'image' | 'box' | 'group';
+  type: 'text' | 'image' | 'box' | 'group' | 'path';
   parentId: string | null;
   groupId: string | null;
   shapeType?: 'rectangle' | 'circle'; // For box types
@@ -29,6 +36,8 @@ export interface DesignElement {
   height: number;
   content?: string;
   src?: string; // For images
+  points?: PathPoint[]; // For path types
+  isClosed?: boolean; // For path types
   style?: {
     backgroundColor?: string;
     color?: string;
@@ -41,6 +50,9 @@ export interface DesignElement {
     borderRadius?: number;
     borderWidth?: number;
     borderColor?: string;
+    stroke?: string;
+    strokeWidth?: number;
+    fill?: string;
   };
   constraints: ConstraintType[];
 }

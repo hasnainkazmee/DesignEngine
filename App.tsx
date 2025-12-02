@@ -57,7 +57,13 @@ export default function App() {
     handleGroup,
     handleUngroup,
     handleZoom,
-    addImageElement
+    addImageElement,
+    activePath,
+    penToolState,
+    editingPathId,
+    handlePenToolMouseDown,
+    handlePenToolMouseMove,
+    handlePenToolMouseUp
   } = useDesignEngine();
 
   // Preload default fonts
@@ -149,6 +155,12 @@ export default function App() {
               onPanChange={setCanvasPan}
               zoom={canvasZoom}
               exportRef={exportTargetRef}
+              activePath={activePath}
+              penToolState={penToolState}
+              editingPathId={editingPathId}
+              onPenToolMouseDown={handlePenToolMouseDown}
+              onPenToolMouseMove={handlePenToolMouseMove}
+              onPenToolMouseUp={handlePenToolMouseUp}
             />
           </div>
 

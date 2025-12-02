@@ -8,7 +8,8 @@ import {
   DEFAULT_SYSTEM,
   DesignSystem,
   DesignIntention,
-  DesignVitalSigns
+  DesignVitalSigns,
+  PathPoint
 } from '../types';
 
 // Utility for color distance
@@ -39,6 +40,17 @@ export const useDesignEngine = () => {
   const [lastActiveTool, setLastActiveTool] = useState<ToolType>('select'); // For spacebar panning
   const [activeSidePanel, setActiveSidePanel] = useState<'layers' | 'colors' | 'library' | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [activePath, setActivePath] = useState<{
+    points: PathPoint[];
+    isClosed: boolean;
+  } | null>(null);
+  const [penToolState, setPenToolState] = useState<{
+    isDragging: boolean;
+    startX: number;
+    startY: number;
+    currentPointIndex: number | null;
+  } | null>(null);
+  const [editingPathId, setEditingPathId] = useState<string | null>(null);
 
   // Canvas State
   const [canvasPan, setCanvasPan] = useState({ x: 50, y: 50 }); // Initial margin
@@ -465,6 +477,212 @@ export const useDesignEngine = () => {
     []
   );
 
+  // Pen Tool: Handle mouse down - start point or start dragging for curve
+  const handlePenToolMouseDown = useCallback(
+    (x: number, y: number) => {
+      const snappedX = snapToGrid(x, 'x', false);
+      const snappedY = snapToGrid(y, 'y', false);
+
+      setActivePath(prev => {
+        if (!prev) {
+          // Start new path - allow dragging the first point
+          const firstPoint = { x: snappedX, y: snappedY };
+          setPenToolState({
+            isDragging: true,
+            startX: snappedX,
+            startY: snappedY,
+            currentPointIndex: 0
+          });
+          return {
+            points: [firstPoint],
+            isClosed: false
+          };
+        }
+
+        // Check if closing path (clicking near start)
+        const startPoint = prev.points[0];
+        if (Math.abs(startPoint.x - snappedX) < 10 && Math.abs(startPoint.y - snappedY) < 10) {
+          // Close path and commit
+          const newId = `path-${Date.now()}`;
+          const allPoints = [...prev.points];
+          const minX = Math.min(...allPoints.map(p => Math.min(p.x, p.control1?.x ?? p.x, p.control2?.x ?? p.x)));
+          const minY = Math.min(...allPoints.map(p => Math.min(p.y, p.control1?.y ?? p.y, p.control2?.y ?? p.y)));
+          const maxX = Math.max(...allPoints.map(p => Math.max(p.x, p.control1?.x ?? p.x, p.control2?.x ?? p.x)));
+          const maxY = Math.max(...allPoints.map(p => Math.max(p.y, p.control1?.y ?? p.y, p.control2?.y ?? p.y)));
+
+          const width = Math.max(1, maxX - minX);
+          const height = Math.max(1, maxY - minY);
+
+          // Normalize points
+          const normalizedPoints = allPoints.map(p => ({
+            ...p,
+            x: p.x - minX,
+            y: p.y - minY,
+            control1: p.control1 ? { x: p.control1.x - minX, y: p.control1.y - minY } : undefined,
+            control2: p.control2 ? { x: p.control2.x - minX, y: p.control2.y - minY } : undefined
+          }));
+
+          const newEl: DesignElement = {
+            id: newId,
+            type: 'path',
+            parentId: null,
+            groupId: null,
+            x: minX,
+            y: minY,
+            width,
+            height,
+            points: normalizedPoints,
+            isClosed: true,
+            constraints: [],
+            style: {
+              stroke: '#000000',
+              strokeWidth: 2,
+              fill: 'none'
+            }
+          };
+          setElements(current => [...current, newEl]);
+          setSelectedElementIds([newId]);
+          return null; // Reset active path
+        }
+
+        // Add new point - the CLICK finalizes the previous segment
+        // The DRAG (if any) will set up handles for the NEXT segment
+        const newPointIndex = prev.points.length;
+        const lastPoint = prev.points[prev.points.length - 1];
+        
+        // First, add the point as clicked (this finalizes A→B segment)
+        // If previous point had an exit handle (control2), A→B will curve
+        // So we need to set control1 on the new point to match the previous point's control2
+        const newPoint: PathPoint = { 
+          x: snappedX, 
+          y: snappedY,
+        };
+        
+        // Don't set control1 on the new point here
+        // If previous point has control2, the curve will be calculated during rendering
+        // control1 will only be set when the user drags from this point
+
+        // Start dragging state - this will set up handles for future segment
+        setPenToolState({
+          isDragging: true,
+          startX: snappedX,
+          startY: snappedY,
+          currentPointIndex: newPointIndex
+        });
+
+        return {
+          ...prev,
+          points: [...prev.points, newPoint]
+        };
+      });
+    },
+    [snapToGrid, setElements, setSelectedElementIds]
+  );
+
+  // Pen Tool: Handle mouse move - update control point while dragging
+  const handlePenToolMouseMove = useCallback(
+    (x: number, y: number) => {
+      if (!penToolState?.isDragging || penToolState.currentPointIndex === null) return;
+      if (!activePath) return;
+
+      const snappedX = snapToGrid(x, 'x', false);
+      const snappedY = snapToGrid(y, 'y', false);
+
+      setActivePath(prev => {
+        if (!prev) return null;
+
+        const pointIndex = penToolState.currentPointIndex!;
+        const currentPoint = prev.points[pointIndex];
+        const prevPoint = pointIndex > 0 ? prev.points[pointIndex - 1] : null;
+
+        // Calculate drag direction
+        const dx = snappedX - currentPoint.x;
+        const dy = snappedY - currentPoint.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        // If this is the first point (no previous point), set up exit handle for future segment
+        if (!prevPoint) {
+          if (distance > 5) {
+            // Set exit handle (control2) on first point - position it exactly where you're dragging
+            // No constraints, no distance limits
+            const control2X = snappedX;
+            const control2Y = snappedY;
+
+            const updatedPoints = [...prev.points];
+            updatedPoints[pointIndex] = {
+              ...currentPoint,
+              control2: { x: control2X, y: control2Y }
+              // No control1 on first point
+            };
+
+            return {
+              ...prev,
+              points: updatedPoints
+            };
+          }
+          return prev;
+        }
+
+        if (distance > 5) { // Only create curve if dragged far enough
+          // Photoshop behavior: Dragging at current point sets up handles for the NEXT segment
+          // The drag creates:
+          // 1. Exit handle (control2) on current point - for the future segment
+          // 2. Paired incoming handle (control1) on current point - mirrors the exit handle
+          // The current segment (prev→current) only curves if prev had an exit handle
+          
+          // Normalize the drag direction
+          const dragLength = Math.sqrt(dx * dx + dy * dy);
+          const normalizedDx = dragLength > 0 ? dx / dragLength : 0;
+          const normalizedDy = dragLength > 0 ? dy / dragLength : 0;
+
+          // Control point follows drag direction directly - no constraints, no mirroring
+          // Use the actual drag distance and direction
+          
+          // Exit handle (control2) on current point - this is for the NEXT segment
+          // Position it exactly where you're dragging
+          const control2X = snappedX;
+          const control2Y = snappedY;
+
+          const updatedPoints = [...prev.points];
+          
+          // IMPORTANT: Do NOT modify previous point
+          // The previous segment (prev→current) was already finalized when we clicked
+          // It only curves if prev already had a control2 handle
+          
+          // Set handles on current point
+          // control2 is for the NEXT segment (future) - set to exact drag position
+          // control1: only set if it doesn't exist (preserve existing curve from prev point)
+          const updatedPoint = {
+            ...currentPoint,
+            control2: { x: control2X, y: control2Y } // Exit handle follows drag exactly
+          };
+          
+          // Only set control1 if it doesn't already exist (from previous point's handle)
+          // If it exists, it means the segment was already curved, so keep it
+          if (!currentPoint.control1) {
+            // Don't create paired handle - let user control it freely
+            // control1 will be set when they drag from the next point if they want
+          }
+          
+          updatedPoints[pointIndex] = updatedPoint;
+
+          return {
+            ...prev,
+            points: updatedPoints
+          };
+        }
+
+        return prev;
+      });
+    },
+    [penToolState, activePath, snapToGrid]
+  );
+
+  // Pen Tool: Handle mouse up - finalize point
+  const handlePenToolMouseUp = useCallback(() => {
+    setPenToolState(null);
+  }, []);
+
   const handleCanvasAdd = useCallback(
     (x: number, y: number) => {
       if (activeTool === 'select' || activeTool === 'hand') {
@@ -472,6 +690,12 @@ export const useDesignEngine = () => {
           setSelectedElementIds([]);
           setEditingTextId(null);
         }
+        return;
+      }
+
+      // Pen Tool Logic - handled by handlePenToolMouseDown
+      if (activeTool === 'pen') {
+        handlePenToolMouseDown(x, y);
         return;
       }
 
@@ -490,6 +714,8 @@ export const useDesignEngine = () => {
       const newEl: DesignElement = {
         id: newId,
         type: activeTool === 'type' ? 'text' : activeTool === 'image' ? 'image' : 'box',
+        parentId: null,
+        groupId: null,
         shapeType: activeTool === 'shape' ? 'rectangle' : undefined,
         role,
         x: snappedX,
@@ -748,6 +974,39 @@ export const useDesignEngine = () => {
     (e: KeyboardEvent) => {
       if (editingTextId) return;
 
+      // Undo last point in active path (Ctrl+Z or Cmd+Z)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey && activePath && activeTool === 'pen') {
+        e.preventDefault();
+        setActivePath(prev => {
+          if (!prev || prev.points.length === 0) return null;
+          if (prev.points.length === 1) {
+            // If only one point left, clear the entire path
+            return null;
+          }
+          // Remove last point
+          return {
+            ...prev,
+            points: prev.points.slice(0, -1)
+          };
+        });
+        // Reset pen tool state if we removed the point being dragged
+        if (penToolState && penToolState.currentPointIndex !== null) {
+          const lastIndex = activePath.points.length - 1;
+          if (penToolState.currentPointIndex >= lastIndex) {
+            setPenToolState(null);
+          }
+        }
+        return;
+      }
+
+      // Delete incomplete path (Delete/Backspace when pen tool is active and path exists)
+      if ((e.key === 'Delete' || e.key === 'Backspace') && activePath && activeTool === 'pen') {
+        e.preventDefault();
+        setActivePath(null);
+        setPenToolState(null);
+        return;
+      }
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedElementIds.length > 0) {
           setElements((prev) =>
@@ -762,6 +1021,66 @@ export const useDesignEngine = () => {
       if (e.key === 't') setActiveTool('type');
       if (e.key === 'r') setActiveTool('shape');
       if (e.key === 'h') setActiveTool('hand');
+      if (e.key === 'p') setActiveTool('pen');
+
+      // Finish path on Enter/Esc
+      if ((e.key === 'Enter' || e.key === 'Escape') && activePath) {
+        if (activePath.points.length > 1) {
+          const newId = `path-${Date.now()}`;
+
+          // Calculate Bounding Box including control points
+          const allPoints = activePath.points;
+          const allX = allPoints.flatMap(p => [
+            p.x,
+            p.control1?.x,
+            p.control2?.x
+          ].filter((v): v is number => v !== undefined));
+          const allY = allPoints.flatMap(p => [
+            p.y,
+            p.control1?.y,
+            p.control2?.y
+          ].filter((v): v is number => v !== undefined));
+          const minX = Math.min(...allX);
+          const minY = Math.min(...allY);
+          const maxX = Math.max(...allX);
+          const maxY = Math.max(...allY);
+
+          const width = Math.max(1, maxX - minX);
+          const height = Math.max(1, maxY - minY);
+
+          // Normalize points
+          const normalizedPoints = allPoints.map(p => ({
+            ...p,
+            x: p.x - minX,
+            y: p.y - minY,
+            control1: p.control1 ? { x: p.control1.x - minX, y: p.control1.y - minY } : undefined,
+            control2: p.control2 ? { x: p.control2.x - minX, y: p.control2.y - minY } : undefined
+          }));
+
+          const newEl: DesignElement = {
+            id: newId,
+            type: 'path',
+            parentId: null,
+            groupId: null,
+            x: minX,
+            y: minY,
+            width,
+            height,
+            points: normalizedPoints,
+            isClosed: false,
+            constraints: [],
+            style: {
+              stroke: '#000000',
+              strokeWidth: 2,
+              fill: 'none'
+            }
+          };
+          setElements(prev => [...prev, newEl]);
+          setSelectedElementIds([newId]);
+        }
+        setActivePath(null);
+        setActiveTool('select');
+      }
 
       // Spacebar Pan Toggle
       if (e.code === 'Space' && activeTool !== 'hand') {
@@ -770,7 +1089,7 @@ export const useDesignEngine = () => {
         setActiveTool('hand');
       }
     },
-    [selectedElementIds, editingTextId, activeTool]
+    [selectedElementIds, editingTextId, activeTool, activePath, penToolState]
   );
 
   const handleKeyUp = useCallback(
@@ -791,12 +1110,29 @@ export const useDesignEngine = () => {
     };
   }, [handleKeyDown, handleKeyUp]);
 
+  // Auto-enter path editing mode when a path is selected
+  useEffect(() => {
+    if (activeTool === 'select' && selectedElementIds.length === 1) {
+      const selected = elements.find(el => el.id === selectedElementIds[0]);
+      if (selected?.type === 'path') {
+        setEditingPathId(selected.id);
+      } else {
+        setEditingPathId(null);
+      }
+    } else {
+      setEditingPathId(null);
+    }
+  }, [selectedElementIds, elements, activeTool]);
+
   return {
     // State
     activeTool,
     setActiveTool,
     lastActiveTool,
     setLastActiveTool,
+    activePath,
+    penToolState,
+    editingPathId,
     activeSidePanel,
     setActiveSidePanel,
     editingTextId,
@@ -830,6 +1166,9 @@ export const useDesignEngine = () => {
     // Handlers
     handleElementUpdate,
     handleCanvasAdd,
+    handlePenToolMouseDown,
+    handlePenToolMouseMove,
+    handlePenToolMouseUp,
     addComponentToCanvas,
     createComponentFromElements,
     addImageElement,
